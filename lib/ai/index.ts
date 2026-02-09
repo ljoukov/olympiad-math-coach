@@ -1,11 +1,10 @@
-import type { AIProvider } from "./provider"
+import { llmProvider } from "./llmProvider"
 import { mockProvider } from "./mockProvider"
-import { geminiProvider } from "./geminiProvider"
+import type { AIProvider } from "./provider"
 
-// To use OpenAI or another provider, set AI_PROVIDER=openai in env
-// and implement an openaiProvider in ./openaiProvider.ts
+// Default provider uses @ljoukov/llm (supports OpenAI, Gemini, ChatGPT subscription models).
 export function getAIProvider(): AIProvider {
-  const provider = (process.env.AI_PROVIDER || "gemini").toLowerCase()
+  const provider = (process.env.AI_PROVIDER || "llm").toLowerCase()
   if (provider === "mock") return mockProvider
-  return geminiProvider
+  return llmProvider
 }

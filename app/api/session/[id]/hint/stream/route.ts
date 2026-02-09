@@ -1,7 +1,15 @@
 import { NextResponse } from "next/server"
-import { getSession } from "@/lib/auth"
-import { getDb, createId, type HintRung } from "@/lib/db"
 import { getAIProvider } from "@/lib/ai"
+import { createId } from "@/lib/id"
+import {
+  AttemptHintSchema,
+  HintRequestBodySchema,
+  SessionAttemptSchema,
+} from "@/lib/schemas"
+import { getProblem } from "@/lib/server/admin-data"
+import { getAdminFirestore } from "@/lib/server/firestore"
+import { attemptDocPath, attemptHintsPath } from "@/lib/server/paths"
+import { getUserFromRequest } from "@/lib/server/request-user"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -25,8 +33,9 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const user = await getSession()
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const user = await getUserFromRequest(request)
+  if (!user)
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
   const { id } = await params
 
@@ -37,19 +46,22 @@ export async function POST(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 })
   }
 
-  const rung = (body as { rung?: unknown }).rung
-  const stuckConfidence = (body as { stuckConfidence?: unknown }).stuckConfidence
-
-  if (typeof rung !== "string" || !["NUDGE", "POINTER", "KEY"].includes(rung)) {
-    return NextResponse.json({ error: "Invalid rung" }, { status: 400 })
+  const parsed = HintRequestBodySchema.safeParse(body)
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid request" }, { status: 400 })
   }
 
-  const db = getDb()
-  const attempt = db.sessionAttempts.find((a) => a.id === id && a.userId === user.id)
-  if (!attempt) return NextResponse.json({ error: "Attempt not found" }, { status: 404 })
+  const { rung, stuckConfidence } = parsed.data
 
-  const problem = db.problems.find((p) => p.id === attempt.problemId)
-  if (!problem) return NextResponse.json({ error: "Problem not found" }, { status: 404 })
+  const db = getAdminFirestore()
+  const attemptSnap = await db.doc(attemptDocPath(user.id, id)).get()
+  if (!attemptSnap.exists)
+    return NextResponse.json({ error: "Attempt not found" }, { status: 404 })
+  const attempt = SessionAttemptSchema.parse(attemptSnap.data())
+
+  const problem = await getProblem(attempt.problemId)
+  if (!problem)
+    return NextResponse.json({ error: "Problem not found" }, { status: 404 })
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -67,9 +79,9 @@ export async function POST(
         const hintText = await provider.generateHint(
           problem,
           attempt.attemptText || "",
-          rung as HintRung,
+          rung,
           attempt.persona,
-          typeof stuckConfidence === "number" ? stuckConfidence : undefined,
+          stuckConfidence,
           {
             onDelta: (delta) => {
               if (delta.thoughtDelta) {
@@ -90,15 +102,20 @@ export async function POST(
         const hint = {
           id: createId(),
           attemptId: id,
-          rung: rung as HintRung,
+          rung,
           hintText,
           createdAt: new Date().toISOString(),
         }
-        db.attemptHints.push(hint)
+        const validated = AttemptHintSchema.parse(hint)
+        await db
+          .collection(attemptHintsPath(user.id, id))
+          .doc(validated.id)
+          .set(validated)
 
         send("done", { hint: { rung: hint.rung, hintText: hint.hintText } })
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Hint generation failed"
+        const message =
+          err instanceof Error ? err.message : "Hint generation failed"
         console.error("Hint SSE failed:", err)
         send("error", { error: message })
       } finally {
@@ -109,4 +126,3 @@ export async function POST(
 
   return new Response(stream, { headers: sseHeaders() })
 }
-

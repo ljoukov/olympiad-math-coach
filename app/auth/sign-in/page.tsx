@@ -1,36 +1,54 @@
 "use client"
 
-import React from "react"
+import { BookOpen, Chrome, User } from "lucide-react"
 
-import { useState } from "react"
 import { useRouter } from "next/navigation"
-import { useAuth } from "@/hooks/use-auth"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { BookOpen } from "lucide-react"
-import Link from "next/link"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { useAuth } from "@/hooks/use-auth"
 
 export default function SignInPage() {
-  const [email, setEmail] = useState("")
-  const [password, setPassword] = useState("")
-  const [error, setError] = useState("")
-  const [loading, setLoading] = useState(false)
-  const { signIn } = useAuth()
   const router = useRouter()
+  const { user, isLoading, signInWithGoogle, signInAsGuest } = useAuth()
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError("")
-    setLoading(true)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState<"google" | "guest" | null>(null)
+
+  useEffect(() => {
+    if (!isLoading && user) {
+      router.replace("/")
+    }
+  }, [isLoading, user, router])
+
+  const handleGoogle = async () => {
+    setError(null)
+    setLoading("google")
     try {
-      await signIn(email, password)
-      router.push("/")
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Sign in failed")
+      await signInWithGoogle()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Google sign-in failed")
     } finally {
-      setLoading(false)
+      setLoading(null)
+    }
+  }
+
+  const handleGuest = async () => {
+    setError(null)
+    setLoading("guest")
+    try {
+      await signInAsGuest()
+      router.push("/")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Guest sign-in failed")
+    } finally {
+      setLoading(null)
     }
   }
 
@@ -42,41 +60,31 @@ export default function SignInPage() {
             <BookOpen className="h-6 w-6" />
           </div>
           <CardTitle className="text-xl">Sign In</CardTitle>
-          <CardDescription>Enter your credentials to continue</CardDescription>
+          <CardDescription>Choose a sign-in method to continue</CardDescription>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="student@hamilton.dev"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="student123"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-            {error && <p className="text-sm text-destructive">{error}</p>}
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Signing in..." : "Sign In"}
-            </Button>
-            <p className="text-center text-sm text-muted-foreground">
-              {"No account? "}
-              <Link href="/auth/sign-up" className="text-primary underline">Create one</Link>
-            </p>
-          </form>
+        <CardContent className="space-y-3">
+          {error && <p className="text-sm text-destructive">{error}</p>}
+
+          <Button
+            type="button"
+            className="w-full"
+            onClick={handleGoogle}
+            disabled={loading !== null}
+          >
+            <Chrome className="h-4 w-4 mr-2" />
+            {loading === "google" ? "Signing in..." : "Continue with Google"}
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full bg-transparent"
+            onClick={handleGuest}
+            disabled={loading !== null}
+          >
+            <User className="h-4 w-4 mr-2" />
+            {loading === "guest" ? "Signing in..." : "Continue as Guest"}
+          </Button>
         </CardContent>
       </Card>
     </div>

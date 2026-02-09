@@ -6,7 +6,9 @@ type FetchSseOptions = {
   onEvent: SseEventHandler
 }
 
-function parseSseEventBlock(block: string): { event: string; data: string } | null {
+function parseSseEventBlock(
+  block: string
+): { event: string; data: string } | null {
   const lines = block.split(/\r?\n/u)
   let event = "message"
   const dataLines: string[] = []
@@ -23,7 +25,6 @@ function parseSseEventBlock(block: string): { event: string; data: string } | nu
       // Per SSE spec, everything after ":" is the value (optional leading space).
       const value = line.slice("data:".length).replace(/^ /u, "")
       dataLines.push(value)
-      continue
     }
   }
 
@@ -83,4 +84,3 @@ export async function fetchSse(
     }
   }
 }
-

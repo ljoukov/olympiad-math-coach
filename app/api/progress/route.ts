@@ -1,49 +1,85 @@
 import { NextResponse } from "next/server"
-import { getSession } from "@/lib/auth"
-import { getDb } from "@/lib/db"
+import { SessionAttemptSchema, UserMoveStateSchema } from "@/lib/schemas"
+import { listMoves, listProblems } from "@/lib/server/admin-data"
+import { getAdminFirestore } from "@/lib/server/firestore"
+import { userAttemptsPath, userMoveStatesPath } from "@/lib/server/paths"
+import { getUserFromRequest } from "@/lib/server/request-user"
 
-export async function GET() {
-  const user = await getSession()
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+export async function GET(request: Request) {
+  const user = await getUserFromRequest(request)
+  if (!user)
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
-  const db = getDb()
+  const db = getAdminFirestore()
 
-  // Get user's attempts (submitted only)
-  const attempts = db.sessionAttempts
-    .filter((a) => a.userId === user.id && a.submittedAt)
-    .sort((a, b) => new Date(b.submittedAt!).getTime() - new Date(a.submittedAt!).getTime())
+  const [attemptsSnap, moveStatesSnap, moves, problems] = await Promise.all([
+    db.collection(userAttemptsPath(user.id)).get(),
+    db.collection(userMoveStatesPath(user.id)).get(),
+    listMoves(),
+    listProblems(),
+  ])
+
+  const problemById = new Map(problems.map((p) => [p.id, p]))
+  const moveById = new Map(moves.map((m) => [m.id, m]))
+
+  // Attempts (submitted only)
+  const attemptsAll = attemptsSnap.docs.map((d) =>
+    SessionAttemptSchema.parse(d.data())
+  )
+  const submittedAttempts = attemptsAll.filter(
+    (a): a is typeof a & { submittedAt: string } =>
+      typeof a.submittedAt === "string" && a.submittedAt.length > 0
+  )
+  const attempts = submittedAttempts
+    .sort(
+      (a, b) =>
+        new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+    )
     .slice(0, 10)
-    .map((a) => {
-      const problem = db.problems.find((p) => p.id === a.problemId)
+    .map((a) => ({
+      id: a.id,
+      problemTitle: problemById.get(a.problemId)?.title || "Unknown",
+      marks: a.estimatedMarks,
+      startConfidence: a.startConfidence,
+      finalConfidence: a.finalConfidence,
+      submittedAt: a.submittedAt,
+    }))
+
+  // Move states (join with move metadata)
+  const storedMoveStates = moveStatesSnap.docs.map((d) =>
+    UserMoveStateSchema.parse(d.data())
+  )
+
+  type MoveStateRow = {
+    moveId: string
+    moveName: string
+    category: string
+    whenToUse: string
+    commonTrap: string
+    status: string
+    pinned: boolean
+    lastExampleText: string | null
+  }
+
+  const moveStates: MoveStateRow[] = storedMoveStates
+    .map((ms): MoveStateRow | null => {
+      const move = moveById.get(ms.moveId)
+      if (!move) return null
       return {
-        id: a.id,
-        problemTitle: problem?.title || "Unknown",
-        marks: a.estimatedMarks,
-        startConfidence: a.startConfidence,
-        finalConfidence: a.finalConfidence,
-        submittedAt: a.submittedAt,
+        moveId: ms.moveId,
+        moveName: move.name,
+        category: move.category,
+        whenToUse: move.whenToUse,
+        commonTrap: move.commonTrap,
+        status: ms.status,
+        pinned: ms.pinned,
+        lastExampleText: ms.lastExampleText,
       }
     })
+    .filter((ms): ms is MoveStateRow => ms !== null)
 
-  // Get move states
-  const moveStates = db.userMoveStates
-    .filter((s) => s.userId === user.id)
-    .map((s) => {
-      const move = db.moves.find((m) => m.id === s.moveId)
-      return {
-        moveId: s.moveId,
-        moveName: move?.name || "",
-        category: move?.category || "",
-        whenToUse: move?.whenToUse || "",
-        commonTrap: move?.commonTrap || "",
-        status: s.status,
-        pinned: s.pinned,
-        lastExampleText: s.lastExampleText,
-      }
-    })
-
-  // Ensure all moves have states
-  for (const move of db.moves) {
+  // Ensure all moves have a state (default NOT_YET)
+  for (const move of moves) {
     if (!moveStates.find((ms) => ms.moveId === move.id)) {
       moveStates.push({
         moveId: move.id,
@@ -61,12 +97,13 @@ export async function GET() {
   // Calibration
   let calibrationStatus = "NOT_ENOUGH_DATA"
   let avgError = 0
+
   const calibratable = attempts.filter(
     (a) => a.finalConfidence != null && a.marks != null
   )
   if (calibratable.length >= 3) {
-    const errors = calibratable.map(
-      (a) => Math.abs((a.finalConfidence || 0) - (a.marks || 0) * 10)
+    const errors = calibratable.map((a) =>
+      Math.abs((a.finalConfidence || 0) - (a.marks || 0) * 10)
     )
     avgError = Math.round(errors.reduce((s, e) => s + e, 0) / errors.length)
     if (avgError < 15) calibrationStatus = "GOOD"

@@ -1,5 +1,5 @@
-import type { AIProvider, FeedbackResult, AIStreamOptions } from "./provider"
-import type { Problem, HintRung, AttemptClaim } from "@/lib/db"
+import type { AttemptClaim, HintRung, Problem } from "@/lib/schemas"
+import type { AIProvider, AIStreamOptions, FeedbackResult } from "./provider"
 
 const personaHintPrefix: Record<string, Record<HintRung, string>> = {
   COACH: {
@@ -33,13 +33,25 @@ export const mockProvider: AIProvider = {
 
     switch (rung) {
       case "NUDGE":
-        return prefix + `Have you tried restating what the problem is asking? The problem involves: ${problem.topicTags.join(", ")}.`
+        return (
+          prefix +
+          `Have you tried restating what the problem is asking? The problem involves: ${problem.topicTags.join(", ")}.`
+        )
       case "POINTER":
-        return prefix + (outline[0] || "Start by carefully defining your variables and what you need to show.")
-      case "KEY":
+        return (
+          prefix +
+          (outline[0] ||
+            "Start by carefully defining your variables and what you need to show.")
+        )
+      case "KEY": {
         // Give a more substantive hint from the middle of the outline
         const midIdx = Math.floor(outline.length / 2)
-        return prefix + (outline[midIdx] || "Think about the core algebraic manipulation needed.")
+        return (
+          prefix +
+          (outline[midIdx] ||
+            "Think about the core algebraic manipulation needed.")
+        )
+      }
     }
   },
 
@@ -61,8 +73,13 @@ export const mockProvider: AIProvider = {
       let comment = ""
 
       // Check for keyword matches
-      const matchCount = component.keywords.filter((kw) => text.includes(kw.toLowerCase())).length
-      const matchRatio = component.keywords.length > 0 ? matchCount / component.keywords.length : 0
+      const matchCount = component.keywords.filter((kw) =>
+        text.includes(kw.toLowerCase())
+      ).length
+      const matchRatio =
+        component.keywords.length > 0
+          ? matchCount / component.keywords.length
+          : 0
 
       if (matchRatio >= 0.6) {
         awarded = component.marks
@@ -87,12 +104,26 @@ export const mockProvider: AIProvider = {
     })
 
     // Bonus for presentation markers
-    const presentationMarkers = ["therefore", "hence", "thus", "qed", "=", "since", "because", "proof"]
+    const presentationMarkers = [
+      "therefore",
+      "hence",
+      "thus",
+      "qed",
+      "=",
+      "since",
+      "because",
+      "proof",
+    ]
     const presCount = presentationMarkers.filter((m) => text.includes(m)).length
     if (presCount >= 2) {
-      const presComponent = rubricBreakdown.find((r) => r.name === "Presentation")
+      const presComponent = rubricBreakdown.find(
+        (r) => r.name === "Presentation"
+      )
       if (presComponent && presComponent.awarded < presComponent.maxMarks) {
-        presComponent.awarded = Math.min(presComponent.awarded + 1, presComponent.maxMarks)
+        presComponent.awarded = Math.min(
+          presComponent.awarded + 1,
+          presComponent.maxMarks
+        )
         presComponent.comment = "Good mathematical writing style."
       }
     }
@@ -118,18 +149,29 @@ export const mockProvider: AIProvider = {
 
     // Generate tips
     const tips: string[] = []
-    const weakest = [...rubricBreakdown].sort((a, b) => (a.awarded / a.maxMarks) - (b.awarded / b.maxMarks))
+    const weakest = [...rubricBreakdown].sort(
+      (a, b) => a.awarded / a.maxMarks - b.awarded / b.maxMarks
+    )
     for (const comp of weakest.slice(0, 3)) {
       if (comp.awarded < comp.maxMarks) {
-        tips.push(`Improve "${comp.name}": ${comp.comment} Try including: ${problem.rubricJson.find((r) => r.name === comp.name)?.keywords.slice(0, 3).join(", ")}.`)
+        tips.push(
+          `Improve "${comp.name}": ${comp.comment} Try including: ${problem.rubricJson
+            .find((r) => r.name === comp.name)
+            ?.keywords.slice(0, 3)
+            .join(", ")}.`
+        )
       }
     }
     if (tips.length === 0) {
-      tips.push("Strong attempt! Consider adding more rigour to your justifications.")
+      tips.push(
+        "Strong attempt! Consider adding more rigour to your justifications."
+      )
     }
 
     // Rewritten solution from outline
-    const rewrittenSolution = problem.solutionOutline.map((line, i) => `${i + 1}. ${line}`).join("\n")
+    const rewrittenSolution = problem.solutionOutline
+      .map((line, i) => `${i + 1}. ${line}`)
+      .join("\n")
 
     return {
       estimatedMarks: finalMarks,

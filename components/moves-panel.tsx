@@ -1,10 +1,10 @@
 "use client"
 
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { cn } from "@/lib/utils"
-import { Zap, Pin } from "lucide-react"
+import { Pin, Zap } from "lucide-react"
 import { useState } from "react"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 
 interface MoveData {
   id: string
@@ -60,7 +60,9 @@ export function MovesPanel({
                 )}
                 onClick={() => handleClick(m.id)}
               >
-                {pinnedMoveIds.includes(m.id) && <Pin className="h-3 w-3 mr-1" />}
+                {pinnedMoveIds.includes(m.id) && (
+                  <Pin className="h-3 w-3 mr-1" />
+                )}
                 {m.name}
               </Button>
               {expandedMove === m.id && (
@@ -80,18 +82,24 @@ export function MovesPanel({
 
       {suggestedMoves.length > 0 && (
         <div className="space-y-2">
-          <h3 className="text-sm font-semibold text-foreground">Suggested for this problem</h3>
+          <h3 className="text-sm font-semibold text-foreground">
+            Suggested for this problem
+          </h3>
           <div className="flex flex-wrap gap-1.5">
             {suggestedMoves.map((m) => (
               <div key={m.id} className="space-y-1">
                 <Button
-                  variant={clickedMoveIds.includes(m.id) ? "default" : "secondary"}
+                  variant={
+                    clickedMoveIds.includes(m.id) ? "default" : "secondary"
+                  }
                   size="sm"
                   className="text-xs h-auto py-1.5 px-2.5"
                   onClick={() => handleClick(m.id)}
                 >
                   {m.name}
-                  <Badge variant="outline" className="ml-1.5 text-[10px]">suggested</Badge>
+                  <Badge variant="outline" className="ml-1.5 text-[10px]">
+                    suggested
+                  </Badge>
                 </Button>
                 {expandedMove === m.id && (
                   <div className="rounded-md bg-muted p-2 text-xs text-muted-foreground space-y-1">

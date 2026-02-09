@@ -1,9 +1,9 @@
 "use client"
 
+import { BarChart3, BookOpen, GraduationCap, LogOut } from "lucide-react"
 import Link from "next/link"
-import { useAuth } from "@/hooks/use-auth"
 import { Button } from "@/components/ui/button"
-import { BookOpen, BarChart3, GraduationCap, LogOut } from "lucide-react"
+import { useAuth } from "@/hooks/use-auth"
 
 export function NavHeader() {
   const { user, signOut } = useAuth()
@@ -13,7 +13,10 @@ export function NavHeader() {
   return (
     <header className="border-b border-border bg-card">
       <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-        <Link href="/" className="flex items-center gap-2 text-primary font-bold text-lg">
+        <Link
+          href="/"
+          className="flex items-center gap-2 text-primary font-bold text-lg"
+        >
           <BookOpen className="h-5 w-5" />
           <span>Hamilton Practice</span>
         </Link>
@@ -39,7 +42,9 @@ export function NavHeader() {
             </Button>
           )}
           <div className="ml-2 flex items-center gap-2 border-l border-border pl-3">
-            <span className="text-sm text-muted-foreground">{user.email}</span>
+            <span className="text-sm text-muted-foreground">
+              {user.email || "Guest"}
+            </span>
             <Button variant="ghost" size="sm" onClick={signOut}>
               <LogOut className="h-4 w-4" />
             </Button>

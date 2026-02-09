@@ -1,7 +1,7 @@
 "use client"
 
-import { Slider } from "@/components/ui/slider"
 import { Label } from "@/components/ui/label"
+import { Slider } from "@/components/ui/slider"
 
 const labels = [
   { min: 0, max: 20, text: "Not confident", color: "text-red-600" },
@@ -21,7 +21,11 @@ interface ConfidenceSliderProps {
   label: string
 }
 
-export function ConfidenceSlider({ value, onChange, label }: ConfidenceSliderProps) {
+export function ConfidenceSlider({
+  value,
+  onChange,
+  label,
+}: ConfidenceSliderProps) {
   const info = getLabel(value)
 
   return (

@@ -1,41 +1,58 @@
 import { NextResponse } from "next/server"
-import { getSession } from "@/lib/auth"
-import { getDb, createId } from "@/lib/db"
+import {
+  AddAssignmentProblemsBodySchema,
+  AssignmentSchema,
+} from "@/lib/schemas"
+import { getAdminFirestore } from "@/lib/server/firestore"
+import { adminAssignmentsPath } from "@/lib/server/paths"
+import { getUserFromRequest } from "@/lib/server/request-user"
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const user = await getSession()
+  const user = await getUserFromRequest(request)
   if (!user || user.role !== "TEACHER") {
-    return NextResponse.json({ error: "Teacher access required" }, { status: 403 })
+    return NextResponse.json(
+      { error: "Teacher access required" },
+      { status: 403 }
+    )
   }
 
   const { id } = await params
-  const { problemIds } = await request.json()
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 })
+  }
 
-  const db = getDb()
-  const assignment = db.assignments.find((a) => a.id === id)
-  if (!assignment) return NextResponse.json({ error: "Not found" }, { status: 404 })
+  const parsed = AddAssignmentProblemsBodySchema.safeParse(body)
+  if (!parsed.success) {
+    return NextResponse.json({ error: "Invalid request" }, { status: 400 })
+  }
 
-  const existingIds = db.assignmentProblems
-    .filter((ap) => ap.assignmentId === id)
-    .map((ap) => ap.problemId)
+  const { problemIds } = parsed.data
 
-  let maxOrder = db.assignmentProblems
-    .filter((ap) => ap.assignmentId === id)
-    .reduce((max, ap) => Math.max(max, ap.order), 0)
+  const db = getAdminFirestore()
+  const ref = db.collection(adminAssignmentsPath()).doc(id)
+  const snap = await ref.get()
+  if (!snap.exists)
+    return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  for (const pid of problemIds) {
-    if (!existingIds.includes(pid)) {
-      maxOrder++
-      db.assignmentProblems.push({
-        id: createId(),
-        assignmentId: id,
-        problemId: pid,
-        order: maxOrder,
-      })
-    }
+  const assignment = AssignmentSchema.parse(snap.data())
+  if (assignment.teacherId !== user.id) {
+    return NextResponse.json(
+      { error: "Teacher access required" },
+      { status: 403 }
+    )
+  }
+
+  const existingIds = assignment.problemIds || []
+  const toAdd = problemIds.filter((pid) => !existingIds.includes(pid))
+
+  if (toAdd.length > 0) {
+    await ref.set({ problemIds: [...existingIds, ...toAdd] }, { merge: true })
   }
 
   return NextResponse.json({ ok: true })

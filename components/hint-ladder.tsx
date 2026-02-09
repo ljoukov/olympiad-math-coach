@@ -1,12 +1,16 @@
 "use client"
 
-import { Button } from "@/components/ui/button"
-import { ConfidenceSlider } from "@/components/confidence-slider"
-import { LlmStreamStatus, type LlmUiStage } from "@/components/llm-stream-status"
-import { fetchSse } from "@/lib/sse"
-import { Lightbulb, ArrowRight, Key } from "lucide-react"
+import { ArrowRight, Key, Lightbulb } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
+import { ConfidenceSlider } from "@/components/confidence-slider"
+import {
+  LlmStreamStatus,
+  type LlmUiStage,
+} from "@/components/llm-stream-status"
+import { Button } from "@/components/ui/button"
+import { getAuthHeaders } from "@/lib/authed-fetch"
+import { fetchSse } from "@/lib/sse"
 
 interface Hint {
   rung: string
@@ -19,7 +23,11 @@ interface HintLadderProps {
   onHintReceived: (hint: Hint) => void
 }
 
-export function HintLadder({ attemptId, hints, onHintReceived }: HintLadderProps) {
+export function HintLadder({
+  attemptId,
+  hints,
+  onHintReceived,
+}: HintLadderProps) {
   const [stuckConfidence, setStuckConfidence] = useState(50)
   const [loading, setLoading] = useState<string | null>(null)
   const [showConfidence, setShowConfidence] = useState(false)
@@ -29,9 +37,24 @@ export function HintLadder({ attemptId, hints, onHintReceived }: HintLadderProps
   const [streamError, setStreamError] = useState<string | null>(null)
 
   const rungs = [
-    { id: "NUDGE", label: "Nudge", icon: Lightbulb, description: "A gentle push in the right direction" },
-    { id: "POINTER", label: "Pointer", icon: ArrowRight, description: "A more specific direction to explore" },
-    { id: "KEY", label: "Key Step", icon: Key, description: "The crucial insight (may cap marks at 8)" },
+    {
+      id: "NUDGE",
+      label: "Nudge",
+      icon: Lightbulb,
+      description: "A gentle push in the right direction",
+    },
+    {
+      id: "POINTER",
+      label: "Pointer",
+      icon: ArrowRight,
+      description: "A more specific direction to explore",
+    },
+    {
+      id: "KEY",
+      label: "Key Step",
+      icon: Key,
+      description: "The crucial insight (may cap marks at 8)",
+    },
   ]
 
   const requestHint = async (rung: string) => {
@@ -47,11 +70,12 @@ export function HintLadder({ attemptId, hints, onHintReceived }: HintLadderProps
     setThinking("")
     setStreamError(null)
     try {
+      const authHeaders = await getAuthHeaders()
       await fetchSse(
         `/api/session/${attemptId}/hint/stream`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify({ rung, stuckConfidence }),
         },
         {
@@ -70,7 +94,9 @@ export function HintLadder({ attemptId, hints, onHintReceived }: HintLadderProps
               if (event === "thought") {
                 const delta = String(payload.delta || "")
                 if (delta) {
-                  setStreamStage((prev) => (prev === "preparing" ? prev : "thinking"))
+                  setStreamStage((prev) =>
+                    prev === "preparing" ? prev : "thinking"
+                  )
                   setThinking((prev) => prev + delta)
                 }
                 return
@@ -145,7 +171,9 @@ export function HintLadder({ attemptId, hints, onHintReceived }: HintLadderProps
 
       {showConfidence && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-3">
-          <p className="text-xs text-amber-800 font-medium">Before receiving a hint, rate how stuck you feel:</p>
+          <p className="text-xs text-amber-800 font-medium">
+            Before receiving a hint, rate how stuck you feel:
+          </p>
           <ConfidenceSlider
             value={stuckConfidence}
             onChange={setStuckConfidence}
@@ -157,14 +185,20 @@ export function HintLadder({ attemptId, hints, onHintReceived }: HintLadderProps
         </div>
       )}
 
-      <LlmStreamStatus stage={streamStage} thinkingMarkdown={thinking} error={streamError} />
+      <LlmStreamStatus
+        stage={streamStage}
+        thinkingMarkdown={thinking}
+        error={streamError}
+      />
 
       {hints.length > 0 && (
         <div className="space-y-2">
           {hints.map((h, i) => (
             <div key={i} className="rounded-lg border bg-muted/50 p-3">
               <div className="flex items-center gap-1.5 mb-1">
-                <span className="text-xs font-semibold text-primary">{h.rung}</span>
+                <span className="text-xs font-semibold text-primary">
+                  {h.rung}
+                </span>
               </div>
               <p className="text-sm text-foreground">{h.hintText}</p>
             </div>

@@ -1,29 +1,51 @@
 import { NextResponse } from "next/server"
-import { getSession } from "@/lib/auth"
-import { getDb } from "@/lib/db"
+import {
+  AttemptClaimSchema,
+  AttemptHintSchema,
+  SessionAttemptSchema,
+} from "@/lib/schemas"
+import { getProblem, listMoves } from "@/lib/server/admin-data"
+import { getAdminFirestore } from "@/lib/server/firestore"
+import {
+  attemptClaimsPath,
+  attemptDocPath,
+  attemptHintsPath,
+} from "@/lib/server/paths"
+import { getUserFromRequest } from "@/lib/server/request-user"
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const user = await getSession()
-  if (!user) return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
+  const user = await getUserFromRequest(request)
+  if (!user)
+    return NextResponse.json({ error: "Not authenticated" }, { status: 401 })
 
   const { id } = await params
-  const db = getDb()
-  const attempt = db.sessionAttempts.find((a) => a.id === id && a.userId === user.id)
-  if (!attempt) return NextResponse.json({ error: "Attempt not found" }, { status: 404 })
+  const db = getAdminFirestore()
 
-  const problem = db.problems.find((p) => p.id === attempt.problemId)
-  const claims = db.attemptClaims.filter((c) => c.attemptId === id)
-  const hints = db.attemptHints.filter((h) => h.attemptId === id)
-  const moves = db.moves
+  const attemptSnap = await db.doc(attemptDocPath(user.id, id)).get()
+  if (!attemptSnap.exists)
+    return NextResponse.json({ error: "Attempt not found" }, { status: 404 })
+  const attempt = SessionAttemptSchema.parse(attemptSnap.data())
+
+  const [problem, movesSnap, claimsSnap, hintsSnap] = await Promise.all([
+    getProblem(attempt.problemId),
+    listMoves(),
+    db.collection(attemptClaimsPath(user.id, id)).get(),
+    db.collection(attemptHintsPath(user.id, id)).get(),
+  ])
+  if (!problem)
+    return NextResponse.json({ error: "Problem not found" }, { status: 404 })
+
+  const claims = claimsSnap.docs.map((d) => AttemptClaimSchema.parse(d.data()))
+  const hints = hintsSnap.docs.map((d) => AttemptHintSchema.parse(d.data()))
 
   return NextResponse.json({
     attempt,
     problem,
     claims,
     hints,
-    moves,
+    moves: movesSnap,
   })
 }

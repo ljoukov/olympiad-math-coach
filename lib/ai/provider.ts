@@ -1,8 +1,13 @@
-import type { Problem, HintRung, AttemptClaim, RubricComponent } from "@/lib/db"
+import type { AttemptClaim, HintRung, Problem } from "@/lib/schemas"
 
 export interface FeedbackResult {
   estimatedMarks: number
-  rubricBreakdown: { name: string; maxMarks: number; awarded: number; comment: string }[]
+  rubricBreakdown: {
+    name: string
+    maxMarks: number
+    awarded: number
+    comment: string
+  }[]
   tips: string[]
   rewrittenSolution: string
 }

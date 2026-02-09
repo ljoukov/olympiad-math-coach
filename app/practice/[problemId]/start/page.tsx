@@ -1,27 +1,48 @@
 "use client"
 
-import { NavHeader } from "@/components/nav-header"
-import { PersonaSelector } from "@/components/persona-selector"
-import { ConfidenceSlider } from "@/components/confidence-slider"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { useAuth } from "@/hooks/use-auth"
-import { useRouter, useParams } from "next/navigation"
+import { useParams, useRouter } from "next/navigation"
 import { useState } from "react"
 import useSWR from "swr"
+import { ConfidenceSlider } from "@/components/confidence-slider"
+import { NavHeader } from "@/components/nav-header"
+import { PersonaSelector } from "@/components/persona-selector"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useAuth, useRequireAuth } from "@/hooks/use-auth"
+import { authedJsonFetch } from "@/lib/authed-fetch"
+import type { Persona } from "@/lib/schemas"
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json())
+type ProblemListItem = {
+  id: string
+  title: string
+  statement: string
+  topicTags: string[]
+  difficulty: number
+  movesSuggested: string[]
+}
+
+type ProblemsResponse = {
+  problems: ProblemListItem[]
+}
+
+const fetcher = (url: string) => authedJsonFetch<ProblemsResponse>(url)
 
 export default function StartSessionPage() {
-  const { user, setPersona } = useAuth()
+  const { user, isLoading: authLoading } = useRequireAuth()
+  const { setPersona } = useAuth()
   const router = useRouter()
   const { problemId } = useParams<{ problemId: string }>()
   const [confidence, setConfidence] = useState(50)
-  const [selectedPersona, setSelectedPersona] = useState<string | null>(user?.persona || null)
+  const [selectedPersona, setSelectedPersona] = useState<Persona | null>(
+    user?.persona || null
+  )
   const [starting, setStarting] = useState(false)
 
-  const { data } = useSWR(`/api/problems`, fetcher)
-  const problem = data?.problems?.find((p: { id: string }) => p.id === problemId)
+  const { data } = useSWR<ProblemsResponse>(
+    user ? `/api/problems` : null,
+    fetcher
+  )
+  const problem = data?.problems?.find((p) => p.id === problemId)
 
   const handleStart = async () => {
     if (!problem) return
@@ -31,20 +52,32 @@ export default function StartSessionPage() {
       await setPersona(selectedPersona)
     }
 
-    const res = await fetch("/api/session/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        problemId,
-        persona: selectedPersona || "COACH",
-        startConfidence: confidence,
-      }),
-    })
-    const json = await res.json()
+    const json = await authedJsonFetch<{ attemptId?: string }>(
+      "/api/session/start",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          problemId,
+          persona: selectedPersona || "COACH",
+          startConfidence: confidence,
+        }),
+      }
+    )
     if (json.attemptId) {
       router.push(`/session/${json.attemptId}`)
     }
     setStarting(false)
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <div className="flex items-center justify-center py-20 text-muted-foreground">
+          Loading...
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -59,7 +92,9 @@ export default function StartSessionPage() {
               <CardTitle>{problem.title}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm text-muted-foreground whitespace-pre-wrap">{problem.statement}</p>
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+                {problem.statement}
+              </p>
             </CardContent>
           </Card>
         ) : (
@@ -67,7 +102,9 @@ export default function StartSessionPage() {
         )}
 
         <div className="space-y-2">
-          <h2 className="text-lg font-semibold text-foreground">Choose your persona</h2>
+          <h2 className="text-lg font-semibold text-foreground">
+            Choose your persona
+          </h2>
           <PersonaSelector
             selected={selectedPersona}
             onSelect={setSelectedPersona}
@@ -75,7 +112,9 @@ export default function StartSessionPage() {
         </div>
 
         <div className="space-y-2">
-          <h2 className="text-lg font-semibold text-foreground">How confident are you?</h2>
+          <h2 className="text-lg font-semibold text-foreground">
+            How confident are you?
+          </h2>
           <ConfidenceSlider
             value={confidence}
             onChange={setConfidence}
@@ -85,7 +124,8 @@ export default function StartSessionPage() {
 
         <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
           <p className="text-sm text-primary font-medium">
-            Starter tip: Restate what is being asked in your own words before diving in.
+            Starter tip: Restate what is being asked in your own words before
+            diving in.
           </p>
         </div>
 

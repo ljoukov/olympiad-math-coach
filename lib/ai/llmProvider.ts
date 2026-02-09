@@ -1,17 +1,24 @@
 import "server-only"
 
-import os from "node:os"
-import path from "node:path"
-
-import { loadEnvFromFile, generateJson, type LlmContent } from "@spark/llm"
+import {
+  type GeminiModelId,
+  LlmJsonCallError,
+  loadLocalEnv,
+  parseJsonFromLlmText,
+  streamText,
+} from "@ljoukov/llm"
 import { z } from "zod"
 
-import { getDb, type HintRung, type Persona, type Problem, type AttemptClaim } from "@/lib/db"
-import type { AIProvider, FeedbackResult, AIStreamOptions } from "./provider"
+import type { AttemptClaim, HintRung, Persona, Problem } from "@/lib/schemas"
+import { getMovesByIds } from "@/lib/server/admin-data"
+import type { AIProvider, AIStreamOptions, FeedbackResult } from "./provider"
 
-const MODEL_ID = "gemini-2.5-pro" as const
+const DEFAULT_MODEL: GeminiModelId = "gemini-2.5-pro"
 
-let _sparkEnvLoaded = false
+function resolveModel(): string {
+  const envModel = (process.env.AI_MODEL || "").trim()
+  return envModel || DEFAULT_MODEL
+}
 
 function logLlmJsonError(context: string, err: unknown) {
   const e = err as { name?: unknown; message?: unknown; attempts?: unknown }
@@ -35,21 +42,86 @@ function logLlmJsonError(context: string, err: unknown) {
   })
   // Server-side only: helpful for debugging malformed JSON / blocked responses.
   // Do NOT log environment variables or credentials.
-  console.error(`[geminiProvider] ${context} failed:`, {
+  console.error(`[llmProvider] ${context} failed:`, {
     message: typeof e.message === "string" ? e.message : String(e.message),
     attempts: compact,
   })
 }
 
-function ensureSparkEnvLoaded() {
-  if (_sparkEnvLoaded) return
+async function generateJsonWithStreaming<T>({
+  schema,
+  systemPrompt,
+  prompt,
+  stream,
+  maxAttempts = 2,
+  debugStage = "llm-response",
+}: {
+  schema: z.ZodType<T>
+  systemPrompt: string
+  prompt: string
+  stream?: AIStreamOptions
+  maxAttempts?: number
+  debugStage?: string
+}): Promise<T> {
+  loadLocalEnv()
 
-  // Load secrets/config from the Spark repo env file (as requested).
-  // We do not override already-set environment variables.
-  const sparkEnvPath = path.join(os.homedir(), "projects/spark/web/.env.local")
-  loadEnvFromFile(sparkEnvPath, { override: false })
+  const attempts: Array<{ attempt: number; rawText: string; error: unknown }> =
+    []
+  const model = resolveModel()
 
-  _sparkEnvLoaded = true
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let rawText = ""
+    let sawResponseDelta = false
+
+    const call = streamText({
+      model,
+      systemPrompt,
+      prompt:
+        attempt === 1
+          ? prompt
+          : [
+              prompt,
+              "",
+              "IMPORTANT: Output MUST be a single valid JSON object matching the requested schema.",
+              "Do not wrap it in markdown. Do not include any commentary.",
+            ].join("\n"),
+      responseMimeType: "application/json",
+    })
+
+    try {
+      for await (const event of call.events) {
+        if (event.type !== "delta") continue
+        if (event.channel === "thought") {
+          stream?.onDelta?.({ thoughtDelta: event.text })
+          continue
+        }
+        if (event.channel === "response" && !sawResponseDelta) {
+          // Avoid pushing raw JSON into UI streams; callers only use this to
+          // transition from "thinking" → "preparing".
+          sawResponseDelta = true
+          stream?.onDelta?.({ textDelta: " " })
+        }
+      }
+
+      const result = await call.result
+      rawText = result.text
+
+      const parsedJson = parseJsonFromLlmText(rawText)
+      return schema.parse(parsedJson)
+    } catch (err) {
+      call.abort()
+      attempts.push({ attempt, rawText, error: err })
+      if (attempt >= maxAttempts) {
+        throw new LlmJsonCallError(
+          `Failed to generate valid JSON (${debugStage}) after ${maxAttempts} attempts.`,
+          attempts
+        )
+      }
+    }
+  }
+
+  // Unreachable, but keeps TS happy.
+  throw new Error("Unexpected: exhausted attempts without throwing")
 }
 
 function personaStyle(persona: string): string {
@@ -112,7 +184,9 @@ function buildHintUserPrompt(input: {
     attemptText && attemptText.trim().length > 0 ? attemptText : "(empty)",
     "",
     "Reference solution outline (for correctness only; do NOT quote verbatim unless rung is KEY, and even then keep it partial):",
-    ...(problem.solutionOutline?.length ? problem.solutionOutline.map((s, i) => `${i + 1}. ${s}`) : ["(none)"]),
+    ...(problem.solutionOutline?.length
+      ? problem.solutionOutline.map((s, i) => `${i + 1}. ${s}`)
+      : ["(none)"]),
     "",
     "Output format (JSON only):",
     '{"hintText":"..."}',
@@ -147,7 +221,14 @@ function buildGradeUserPrompt(input: {
   finalConfidence: number
   hintsUsed: HintRung[]
 }): string {
-  const { problem, attemptText, claims, startConfidence, finalConfidence, hintsUsed } = input
+  const {
+    problem,
+    attemptText,
+    claims,
+    startConfidence,
+    finalConfidence,
+    hintsUsed,
+  } = input
 
   const rubricLines = problem.rubricJson.map(
     (r) =>
@@ -157,14 +238,13 @@ function buildGradeUserPrompt(input: {
   const claimsBlock =
     claims.length > 0
       ? claims
-          .map(
-            (c, i) =>
-              [
-                `Claim ${i + 1} (confidence ${Math.max(0, Math.min(100, Math.round(c.confidence)))}%):`,
-                `- claim: ${c.claimText || "(empty)"}`,
-                `- reason: ${c.reasonText || "(empty)"}`,
-                `- link: ${c.linkText || "(empty)"}`,
-              ].join("\n")
+          .map((c, i) =>
+            [
+              `Claim ${i + 1} (confidence ${Math.max(0, Math.min(100, Math.round(c.confidence)))}%):`,
+              `- claim: ${c.claimText || "(empty)"}`,
+              `- reason: ${c.reasonText || "(empty)"}`,
+              `- link: ${c.linkText || "(empty)"}`,
+            ].join("\n")
           )
           .join("\n\n")
       : "(no claims)"
@@ -179,7 +259,9 @@ function buildGradeUserPrompt(input: {
     ...rubricLines,
     "",
     "Reference solution outline (to generate the clean solution):",
-    ...(problem.solutionOutline?.length ? problem.solutionOutline.map((s, i) => `${i + 1}. ${s}`) : ["(none)"]),
+    ...(problem.solutionOutline?.length
+      ? problem.solutionOutline.map((s, i) => `${i + 1}. ${s}`)
+      : ["(none)"]),
     "",
     "Student attempt:",
     attemptText && attemptText.trim().length > 0 ? attemptText : "(empty)",
@@ -227,7 +309,7 @@ function normalizeFeedback(
     const got = byName.get(r.name)
     const awarded = clampInt(got?.awarded ?? 0, 0, r.marks)
     const comment =
-      (got?.comment && String(got.comment).trim().length > 0)
+      got?.comment && String(got.comment).trim().length > 0
         ? String(got.comment).trim()
         : awarded === r.marks
           ? "Fully addressed."
@@ -250,7 +332,8 @@ function normalizeFeedback(
 
   let estimatedMarks = estimatedFromRubric
   let tips = raw.tips.map((t) => String(t).trim()).filter(Boolean)
-  if (tips.length === 0) tips = ["Add clearer justifications for each step you use."]
+  if (tips.length === 0)
+    tips = ["Add clearer justifications for each step you use."]
 
   if (hintsUsed.includes("KEY") && estimatedMarks > 8) {
     estimatedMarks = 8
@@ -266,7 +349,9 @@ function normalizeFeedback(
   const rewrittenSolution =
     raw.rewrittenSolution && raw.rewrittenSolution.trim().length > 0
       ? raw.rewrittenSolution.trim()
-      : (problem.solutionOutline || []).map((s, i) => `${i + 1}. ${s}`).join("\n")
+      : (problem.solutionOutline || [])
+          .map((s, i) => `${i + 1}. ${s}`)
+          .join("\n")
 
   return {
     estimatedMarks,
@@ -276,7 +361,7 @@ function normalizeFeedback(
   }
 }
 
-export const geminiProvider: AIProvider = {
+export const llmProvider: AIProvider = {
   async generateHint(
     problem: Problem,
     attemptText: string,
@@ -285,36 +370,36 @@ export const geminiProvider: AIProvider = {
     stuckConfidence?: number,
     stream?: AIStreamOptions
   ): Promise<string> {
-    ensureSparkEnvLoaded()
-
     // Pull context like move names if the problem references move ids.
-    const db = getDb()
-    const suggestedMoves = (problem.movesSuggested || [])
-      .map((id) => db.moves.find((m) => m.id === id))
-      .filter(Boolean)
-      .map((m) => `- ${m!.name}: ${m!.whenToUse}`)
+    const moveDocs = await getMovesByIds(problem.movesSuggested || [])
+    const suggestedMoves = moveDocs.map((m) => `- ${m.name}: ${m.whenToUse}`)
 
     const system = buildHintSystemPrompt()
     const user = [
-      buildHintUserPrompt({ problem, attemptText, rung, persona, stuckConfidence }),
+      buildHintUserPrompt({
+        problem,
+        attemptText,
+        rung,
+        persona,
+        stuckConfidence,
+      }),
       "",
       suggestedMoves.length > 0
-        ? ["Moves suggested for this problem (optional to mention):", ...suggestedMoves].join("\n")
+        ? [
+            "Moves suggested for this problem (optional to mention):",
+            ...suggestedMoves,
+          ].join("\n")
         : "Moves suggested for this problem: (none)",
     ].join("\n")
 
-    const contents: LlmContent[] = [
-      // Gemini (Vertex) does not accept "system" role in contents; embed system rules in the user prompt.
-      { role: "user", parts: [{ type: "text", text: `${system}\n\n${user}` }] },
-    ]
-
     let result: z.infer<typeof HintSchema>
     try {
-      result = await generateJson({
-        modelId: MODEL_ID,
+      result = await generateJsonWithStreaming({
+        debugStage: "hint",
         schema: HintSchema,
-        contents,
-        onDelta: stream?.onDelta,
+        systemPrompt: system,
+        prompt: user,
+        stream,
       })
     } catch (err) {
       logLlmJsonError("generateHint", err)
@@ -333,8 +418,6 @@ export const geminiProvider: AIProvider = {
     hintsUsed: HintRung[],
     stream?: AIStreamOptions
   ): Promise<FeedbackResult> {
-    ensureSparkEnvLoaded()
-
     const system = buildGradeSystemPrompt()
     const user = buildGradeUserPrompt({
       problem,
@@ -345,18 +428,14 @@ export const geminiProvider: AIProvider = {
       hintsUsed,
     })
 
-    const contents: LlmContent[] = [
-      // Gemini (Vertex) does not accept "system" role in contents; embed system rules in the user prompt.
-      { role: "user", parts: [{ type: "text", text: `${system}\n\n${user}` }] },
-    ]
-
     let raw: z.infer<typeof FeedbackSchema>
     try {
-      raw = await generateJson({
-        modelId: MODEL_ID,
+      raw = await generateJsonWithStreaming({
+        debugStage: "gradeAttempt",
         schema: FeedbackSchema,
-        contents,
-        onDelta: stream?.onDelta,
+        systemPrompt: system,
+        prompt: user,
+        stream,
       })
     } catch (err) {
       logLlmJsonError("gradeAttempt", err)
