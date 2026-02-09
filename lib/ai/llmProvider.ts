@@ -2,10 +2,12 @@ import "server-only"
 
 import {
   type GeminiModelId,
+  isGeminiModelId,
   LlmJsonCallError,
   loadLocalEnv,
   parseJsonFromLlmText,
   streamText,
+  toGeminiJsonSchema,
 } from "@ljoukov/llm"
 import { z } from "zod"
 
@@ -68,24 +70,35 @@ async function generateJsonWithStreaming<T>({
   const attempts: Array<{ attempt: number; rawText: string; error: unknown }> =
     []
   const model = resolveModel()
+  const isGeminiModel = isGeminiModelId(model) || model.startsWith("gemini-")
+  const responseJsonSchema = toGeminiJsonSchema(schema, { name: debugStage })
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let rawText = ""
     let sawResponseDelta = false
 
+    const attemptPrompt =
+      attempt === 1
+        ? prompt
+        : [
+            prompt,
+            "",
+            "IMPORTANT: Output MUST be a single valid JSON object matching the requested schema.",
+            "Do not wrap it in markdown. Do not include any commentary.",
+          ].join("\n")
+
     const call = streamText({
       model,
-      systemPrompt,
-      prompt:
-        attempt === 1
-          ? prompt
-          : [
-              prompt,
-              "",
-              "IMPORTANT: Output MUST be a single valid JSON object matching the requested schema.",
-              "Do not wrap it in markdown. Do not include any commentary.",
-            ].join("\n"),
+      // Gemini rejects "system" role messages (expects system instructions via a separate field).
+      // Our wrapper currently encodes `systemPrompt` as a "system" message, so inline it.
+      systemPrompt: isGeminiModel ? undefined : systemPrompt,
+      prompt: isGeminiModel
+        ? [systemPrompt, "", attemptPrompt].join("\n")
+        : attemptPrompt,
       responseMimeType: "application/json",
+      // Gemini supports responseJsonSchema; this significantly improves adherence to the expected
+      // shape compared to "JSON-only" prompting.
+      responseJsonSchema,
     })
 
     try {
@@ -273,7 +286,24 @@ function buildGradeUserPrompt(input: {
     `Final confidence: ${Math.max(0, Math.min(100, Math.round(finalConfidence)))}%`,
     `Hints used: ${hintsUsed.length > 0 ? hintsUsed.join(", ") : "(none)"}`,
     "",
-    "Return JSON matching the schema exactly.",
+    "Output format (JSON only, no markdown):",
+    "{",
+    '  "estimatedMarks": 0,',
+    '  "rubricBreakdown": [',
+    '    {"name":"<component name>","maxMarks":0,"awarded":0,"comment":"..." }',
+    "  ],",
+    '  "tips": ["..."],',
+    '  "rewrittenSolution": "1. ...\\n2. ..."',
+    "}",
+    "",
+    "Constraints:",
+    "- rubricBreakdown must be an array of objects (one per rubric component).",
+    "- Each item must use keys exactly: name, maxMarks, awarded, comment.",
+    "- name must exactly match the rubric component name.",
+    "- maxMarks must equal that component's marks.",
+    "- awarded must be an integer between 0 and maxMarks (inclusive).",
+    "- tips must be an array of 1-5 short strings.",
+    "- rewrittenSolution must be a single string, numbered steps, one step per line.",
   ].join("\n")
 }
 
